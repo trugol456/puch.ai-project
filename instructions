@@ -1,0 +1,96 @@
+GOAL
+----
+Generate a complete, runnable TypeScript Next.js project named `one-click-resume-tailor` that implements the MVP described below. Use **Supabase** for both object storage (Supabase Storage) and the Postgres database. Provide local dev fallbacks (local filesystem for storage, SQLite or in-memory for DB). Use **Google Gemini** (Vertex AI / PaLM) as the LLM provider instead of OpenAI. Output a full repo tree and exact file contents for every file.
+
+IMPORTANT: Do NOT include real API keys. Provide placeholders such as `GEMINI_API_KEY=replace_me` or instructions to set `GOOGLE_APPLICATION_CREDENTIALS` for a service account. Provide a small wrapper `lib/gemini.ts` that abstracts calls to Gemini so it can be implemented either via the official Google Cloud Node SDK or REST. Tests must mock that wrapper.
+
+MUST-HAVE FEATURES (MVP)
+- Upload resume (PDF/DOCX/TXT), extract text server-side, store file in Supabase Storage `resumes` bucket (or local uploads/ for dev).
+- Paste job URL (server fetch + HTML->text extraction) or job text fallback.
+- Generate tailored resume + cover letter via **Gemini** (server-side). Provide robust prompt templates (ATS-friendly, do not invent dates/names) in `lib/prompts.ts`.
+- Preview generated resume and cover letter in a 2-column editor UI and allow basic edits.
+- Export rendered HTML → PDF using Puppeteer; store PDF in Supabase Storage and return a signed URL.
+- Save generated versions to Supabase Postgres `versions` table and return a short public token.
+- Public share page `/s/:token` renders saved version read-only and increments a view counter in DB.
+- Redaction API to remove emails & phone numbers before making a version public.
+- `POST /api/metrics/view` endpoint for viewer events (used by MCP).
+- Include `.env.example`, seed script, Jest tests (mock Supabase & Gemini), ESLint, Prettier, and GitHub Actions CI.
+
+TECH STACK & CONSTRAINTS
+- Next.js (latest) + TypeScript
+- Supabase JS SDK for server & client usage
+- pdf-parse and mammoth for text extraction
+- **Gemini** (Vertex AI/PaLM) as LLM provider — call through `lib/gemini.ts` wrapper
+- Puppeteer for PDF rendering (use `--no-sandbox` flags, with fallback notes)
+- Jest + @testing-library/react for tests (Gemini & Supabase must be mocked)
+- Provide a storage adapter interface with two implementations: `SupabaseAdapter` and `LocalAdapter`
+- Use Supabase service role key on server only; do not expose it to client code
+- No real credentials in any files — use placeholders or reference `GOOGLE_APPLICATION_CREDENTIALS` env var if service account JSON is used
+
+GEMINI INTEGRATION DETAILS (instructions for Cursor)
+- Create `lib/gemini.ts` exporting a typed async function `generateCompletion(prompt: string, options?: { maxTokens?: number, model?: string }): Promise<string>`.
+- In server code, call `generateCompletion()` to get the tailored resume and cover letter text.
+- Accept an env var `GEMINI_MODEL` (default to `gemini-pro` or configurable) and `GEMINI_API_KEY` or use `GOOGLE_APPLICATION_CREDENTIALS` for service-account-based auth.
+- In `lib/gemini.ts` provide two sensible stub implementations:
+  1. A clear implementation that uses the Google Cloud REST API (HTTP fetch) if `GEMINI_API_KEY` is present. Include the exact request shape as a TODO skeleton (so Cursor can implement a working request or keep it simple).
+  2. A secondary path that throws a friendly error if no credentials are set, and documents how to set `GOOGLE_APPLICATION_CREDENTIALS` or `GEMINI_API_KEY`.
+- Tests must `jest.mock('../lib/gemini')` to return deterministic outputs.
+
+API SPEC (exact endpoints to implement)
+- `POST /api/upload` — multipart upload; return `{ fileId, textPreview }`; store file in Supabase Storage and insert metadata into `files` table.
+- `POST /api/fetch-job` — accepts `{ jobUrl }` or `{ jobText }`; fetch/parse or return pasted text; store in `jobs` table.
+- `POST /api/generate` — accepts `{ fileId | resumeText, jobId | jobText }`; call Gemini via `lib/gemini.ts`; return `{ tailoredResumeHtml, coverLetterHtml, summary }`.
+- `POST /api/export` — accepts `{ html }`; render PDF, upload to Supabase Storage, return signed URL.
+- `POST /api/save-version` — accepts `{ title, resumeHtml, coverHtml, fileId? }`; saves to `versions` and returns `{ versionId, publicToken }`.
+- `GET /s/:token` — public read-only render; increments views.
+- `POST /api/metrics/view` — accepts `{ versionId, sessionId, referrer, ua }` and inserts a row into `views`.
+- `POST /api/redact` — accepts `{ html, options }` and returns redacted HTML.
+- `DELETE /api/version/:id` — delete version + associated files from Supabase and DB.
+
+DB SCHEMA (required)
+- `users`, `files`, `jobs`, `versions` (with `resume_html_redacted`, `public_token`), `views`.
+- Provide `db/migrations.sql` and a `scripts/seed.ts` that seeds one sample job, one sample user, and one sample version.
+
+FILES & OUTPUT
+- Output the **full repository tree** with exact contents for:
+  - `package.json`, `tsconfig.json`, `.eslintrc.js`, `.prettierrc`, `.env.example`, `next.config.js`
+  - `lib/supabase.ts` (server/client clients), `lib/gemini.ts` (wrapper), `lib/prompts.ts`, `lib/storage-adapters/*`
+  - `pages/_app.tsx`, `pages/index.tsx` (upload + job input + generate UI), `pages/s/[token].tsx` (public view)
+  - `pages/api/*` for all endpoints above
+  - `scripts/generate-pdf.ts` (puppeteer), `scripts/seed.ts`
+  - `db/migrations.sql`
+  - `README.md` with step-by-step local setup, a short hackathon checklist, exact `/hackathon submission add` command, demo GIF instructions, and sample curl commands for the entire flow
+  - `PROMPTS.md` documenting prompt templates and tuning tips
+  - `__tests__/*` with Jest tests that mock Gemini & Supabase for: upload parsing, fetch-job fallback, prompt assembly, redaction, save-version + public view + view counter
+  - `.github/workflows/ci.yml` to run `npm ci`, `npm run lint`, `npm run test` on push
+  - `Dockerfile` and `.dockerignore`
+
+ACCEPTANCE CRITERIA (must be satisfied in generated code)
+- Typescript compiles (no `any` except where explained), code uses async/await with try/catch and returns JSON `{ error: 'message' }` on errors.
+- Tests provided and pass with `npm run test` (mocks used; do not call real Gemini/Supabase).
+- `.env.example` includes placeholders: `GEMINI_API_KEY` or instructions for `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_MODEL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `APP_URL`.
+- README contains one-line commands to run locally, seed DB, and run tests.
+
+SECURITY & PRIVACY NOTES (enforce in code)
+- Do not log full resume text; log only truncated previews (first 200 chars).
+- Redact emails/phones before making public; store redacted html in `resume_html_redacted`.
+- Use Supabase service role key only on server.
+- Add a `// TODO` in code where production hardening is needed (Redis rate-limiter, production Puppeteer config).
+
+PROMPT + LLM STRATEGY
+- Put resume tailoring and cover-letter prompt templates in `lib/prompts.ts`. They must be explicit: ATS-friendly, convert paragraphs to bullets, do not invent dates/names, include matched keywords from job text, and output HTML-safe content.
+- In `PROMPTS.md` include tuning tips and example I/O for Gemini.
+
+FINAL OUTPUT FORMAT
+- Print the full repo tree and **each file's exact contents**. Use readable, copy-paste-ready code blocks for each file.
+- At the end, produce:
+  1. Three one-line commands the user runs to get the project running locally (`install`, `seed`, `dev`).
+  2. A short hackathon checklist for Puch.ai submission (files to include, how to create a demo GIF, and the `/hackathon submission add` line).
+  3. A `PROMPTS.md` file with the prompt templates and sample input/output examples.
+
+IMPORTANT
+- Do not include any real API keys or secrets.
+- If something is ambiguous, choose the secure default and add a `// TODO` comment explaining the assumption.
+- Keep the repository minimal but functional; prefer clarity over excessive features.
+
+Now generate the full repository tree and all file contents (TypeScript + configs + tests + README) in one response.
