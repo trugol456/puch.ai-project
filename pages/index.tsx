@@ -137,7 +137,10 @@ export default function Home() {
       }
 
       setGeneratedContent(data);
-      setSuccess('Content generated successfully!');
+      const message = data.usedFallback 
+        ? 'Content generated successfully using demo mode! (Set GEMINI_API_KEY for AI generation)'
+        : 'Content generated successfully!';
+      setSuccess(message);
     } catch (err: any) {
       setError(err.message);
     } finally {
