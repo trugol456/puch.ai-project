@@ -1,13 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  experimental: {
-    appDir: false, // Using pages directory
-  },
-  api: {
-    bodyParser: {
-      sizeLimit: '10mb',
-    },
-  },
-};
+  // Remove deprecated options
+  output: 'standalone', // For Docker builds
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig

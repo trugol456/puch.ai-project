@@ -116,34 +116,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let coverLetterHtml: string;
 
     try {
-      // Generate tailored resume
+      // Generate tailored resume with higher max tokens
       const resumePrompt = buildResumePrompt(resumeData, jobData);
       tailoredResumeHtml = await generateWithFallback(resumePrompt, {
-        maxTokens: 2048,
+        maxTokens: 4096, // Increased for longer resumes
         temperature: 0.7,
       });
 
       // Generate cover letter
       const coverLetterPrompt = buildCoverLetterPrompt(resumeData, jobData);
       coverLetterHtml = await generateWithFallback(coverLetterPrompt, {
-        maxTokens: 1024,
+        maxTokens: 2048, // Should be enough for cover letters
         temperature: 0.8,
       });
     } catch (error: any) {
       console.error('Content generation failed:', error);
       
       // Provide helpful error messages
-      if (error.message.includes('API key')) {
+      if (error.message.includes('API key') || error.message.includes('forbidden')) {
         return res.status(400).json({ 
           error: 'Invalid Gemini API key. Please check your GEMINI_API_KEY environment variable. Get a key from https://makersuite.google.com/app/apikey' 
         });
-      } else if (error.message.includes('quota')) {
+      } else if (error.message.includes('quota') || error.message.includes('rate limit')) {
         return res.status(429).json({ 
           error: 'API quota exceeded. Please try again later or check your Gemini API usage limits.' 
         });
       } else if (error.message.includes('safety')) {
         return res.status(400).json({ 
           error: 'Content generation was blocked by safety filters. Please try with different content.' 
+        });
+      } else if (error.message.includes('truncated')) {
+        return res.status(400).json({ 
+          error: 'Content was too long for AI processing. Please use a shorter resume or job description.' 
+        });
+      } else if (error.message.includes('No content found')) {
+        return res.status(500).json({ 
+          error: 'AI service returned empty response. Please try again or contact support.' 
         });
       } else {
         return res.status(500).json({ 

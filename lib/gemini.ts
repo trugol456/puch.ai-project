@@ -31,9 +31,29 @@ export async function generateCompletion(
           },
         ],
         generationConfig: {
-          maxOutputTokens: options.maxTokens || 2048,
+          maxOutputTokens: options.maxTokens || 4096, // Increased from 2048
           temperature: options.temperature || 0.7,
+          topP: 0.8,
+          topK: 40,
         },
+        safetySettings: [
+          {
+            category: "HARM_CATEGORY_HARASSMENT",
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_HATE_SPEECH", 
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            threshold: "BLOCK_ONLY_HIGH"
+          },
+          {
+            category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+            threshold: "BLOCK_ONLY_HIGH"
+          }
+        ]
       };
 
       const response = await fetch(url, {
@@ -66,23 +86,50 @@ export async function generateCompletion(
       const data = await response.json();
       console.log('Gemini API response structure:', JSON.stringify(data, null, 2));
       
-      // Handle different response structures
+      // Handle different response structures and edge cases
       if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
         
-        // Check for content in the response
-        if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-          return candidate.content.parts[0].text || '';
-        }
-        
-        // Alternative structure check
-        if (candidate.output) {
-          return candidate.output;
-        }
-        
-        // Check if generation was blocked
+        // Check for blocked content
         if (candidate.finishReason === 'SAFETY') {
           throw new Error('Content generation was blocked due to safety filters');
+        }
+        
+        // Handle MAX_TOKENS case
+        if (candidate.finishReason === 'MAX_TOKENS') {
+          console.warn('Response was truncated due to max tokens limit');
+          // Still try to extract what we have
+        }
+        
+        // Check for content with parts (standard structure)
+        if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
+          const text = candidate.content.parts[0].text;
+          if (text && text.trim()) {
+            return text.trim();
+          }
+        }
+        
+        // Alternative: check for content without parts (sometimes the structure varies)
+        if (candidate.content && typeof candidate.content === 'string') {
+          return candidate.content.trim();
+        }
+        
+        // Alternative: check for direct text in candidate
+        if (candidate.text) {
+          return candidate.text.trim();
+        }
+        
+        // Alternative: check for output field
+        if (candidate.output) {
+          return candidate.output.trim();
+        }
+        
+        // If we have a candidate but no readable content
+        console.error('Candidate found but no readable content:', candidate);
+        
+        // Check if the response was empty due to MAX_TOKENS at the very start
+        if (candidate.finishReason === 'MAX_TOKENS') {
+          throw new Error('Response was truncated. Try reducing the prompt length or increasing maxTokens.');
         }
       }
       
@@ -92,13 +139,16 @@ export async function generateCompletion(
       }
       
       console.error('Unexpected Gemini API response format:', data);
-      throw new Error('Unexpected response format from Gemini API');
+      throw new Error('No content found in Gemini API response');
       
     } catch (error: any) {
       console.error('Gemini API error:', error);
       
       // If it's already our custom error, re-throw it
-      if (error.message.includes('Gemini API')) {
+      if (error.message.includes('Gemini API') || 
+          error.message.includes('Content generation was blocked') ||
+          error.message.includes('truncated') ||
+          error.message.includes('No content found')) {
         throw error;
       }
       
@@ -131,10 +181,18 @@ export const mockGenerateCompletion = async (
   options: GeminiOptions = {}
 ): Promise<string> => {
   // Return deterministic mock response for tests
-  if (prompt.includes('tailor resume')) {
+  if (prompt.includes('tailor resume') || prompt.includes('ORIGINAL RESUME')) {
     return `<div class="resume">
-      <h1>Student</h1>
+      <h1>Ujjwal Rai</h1>
       <h2>Backend Developer Intern</h2>
+      
+      <div class="section">
+        <h3>Contact Information</h3>
+        <p>Hyderabad, Telangana</p>
+        <p>Email: [email protected]</p>
+        <p>Phone: [phone number]</p>
+        <p>LinkedIn | GitHub | Codeforces | GeeksforGeeks</p>
+      </div>
       
       <div class="section">
         <h3>Education</h3>
@@ -145,26 +203,28 @@ export const mockGenerateCompletion = async (
       <div class="section">
         <h3>Technical Skills</h3>
         <ul>
-          <li>Backend Development: Node.js, Python, Java</li>
-          <li>Databases: MongoDB, MySQL, PostgreSQL</li>
-          <li>Cloud Platforms: AWS, Google Cloud</li>
-          <li>Version Control: Git, GitHub</li>
+          <li>Backend Development: Node.js, Python, Java, Express.js</li>
+          <li>Databases: MongoDB, MySQL, PostgreSQL, Redis</li>
+          <li>Cloud Platforms: AWS, Google Cloud Platform</li>
+          <li>Programming: Data Structures, Algorithms, System Design</li>
+          <li>Tools: Git, Docker, REST APIs, Microservices</li>
         </ul>
       </div>
       
       <div class="section">
         <h3>Projects & Experience</h3>
         <ul>
-          <li>Developed scalable backend APIs using Node.js and Express</li>
-          <li>Implemented database design and optimization techniques</li>
-          <li>Experience with RESTful API development and testing</li>
-          <li>Built full-stack applications with modern frameworks</li>
+          <li>Developed scalable backend APIs using Node.js and Express.js</li>
+          <li>Implemented efficient database schemas and query optimization</li>
+          <li>Built RESTful services with proper authentication and authorization</li>
+          <li>Experience with cloud deployment and containerization using Docker</li>
+          <li>Strong problem-solving skills demonstrated through competitive programming</li>
         </ul>
       </div>
     </div>`;
   }
   
-  if (prompt.includes('cover letter')) {
+  if (prompt.includes('cover letter') || prompt.includes('CANDIDATE RESUME')) {
     return `<div class="cover-letter">
       <p>Dear 10x Hiring Team,</p>
       
@@ -176,8 +236,17 @@ export const mockGenerateCompletion = async (
       
       <p>Thank you for considering my application. I look forward to hearing from you.</p>
       
-      <p>Sincerely,<br>Computer Science Student</p>
+      <p>Sincerely,<br>Ujjwal Rai</p>
     </div>`;
+  }
+  
+  if (prompt.includes('Remove all email addresses') || prompt.includes('phone numbers')) {
+    // Simple redaction for mock
+    return prompt
+      .replace(/ujjwal3654@gmail\.com/g, '[email protected]')
+      .replace(/\+91-9951718692/g, '[phone number]')
+      .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[email protected]')
+      .replace(/\b\+?[\d\s\-\(\)]{10,}\b/g, '[phone number]');
   }
   
   return 'Mock completion response';
