@@ -1,6 +1,6 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { supabaseAdmin } from '@/lib/supabase';
-import { generateCompletion } from '@/lib/gemini';
+import { generateCompletion, mockGenerateCompletion } from '@/lib/gemini';
 import { 
   buildResumePrompt, 
   buildCoverLetterPrompt, 
@@ -13,6 +13,23 @@ interface GenerateRequestBody {
   resumeText?: string;
   jobId?: string;
   jobText?: string;
+}
+
+async function generateWithFallback(prompt: string, options: any = {}): Promise<string> {
+  try {
+    // Try the real Gemini API first
+    return await generateCompletion(prompt, options);
+  } catch (error: any) {
+    console.warn('Gemini API failed, using mock generation:', error.message);
+    
+    // Fallback to mock generation for development/demo
+    if (process.env.NODE_ENV === 'development') {
+      return await mockGenerateCompletion(prompt, options);
+    }
+    
+    // In production, still throw the error
+    throw error;
+  }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -87,19 +104,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const jobPreview = jobData.fullText.substring(0, 200);
     console.log(`Generating content for resume: ${resumePreview}... and job: ${jobPreview}...`);
 
-    // Generate tailored resume
-    const resumePrompt = buildResumePrompt(resumeData, jobData);
-    const tailoredResumeHtml = await generateCompletion(resumePrompt, {
-      maxTokens: 2048,
-      temperature: 0.7,
-    });
+    // Check if API key is configured
+    const hasApiKey = !!process.env.GEMINI_API_KEY;
+    if (!hasApiKey && process.env.NODE_ENV !== 'development') {
+      return res.status(500).json({ 
+        error: 'Gemini API not configured. Please set GEMINI_API_KEY environment variable.' 
+      });
+    }
 
-    // Generate cover letter
-    const coverLetterPrompt = buildCoverLetterPrompt(resumeData, jobData);
-    const coverLetterHtml = await generateCompletion(coverLetterPrompt, {
-      maxTokens: 1024,
-      temperature: 0.8,
-    });
+    let tailoredResumeHtml: string;
+    let coverLetterHtml: string;
+
+    try {
+      // Generate tailored resume
+      const resumePrompt = buildResumePrompt(resumeData, jobData);
+      tailoredResumeHtml = await generateWithFallback(resumePrompt, {
+        maxTokens: 2048,
+        temperature: 0.7,
+      });
+
+      // Generate cover letter
+      const coverLetterPrompt = buildCoverLetterPrompt(resumeData, jobData);
+      coverLetterHtml = await generateWithFallback(coverLetterPrompt, {
+        maxTokens: 1024,
+        temperature: 0.8,
+      });
+    } catch (error: any) {
+      console.error('Content generation failed:', error);
+      
+      // Provide helpful error messages
+      if (error.message.includes('API key')) {
+        return res.status(400).json({ 
+          error: 'Invalid Gemini API key. Please check your GEMINI_API_KEY environment variable. Get a key from https://makersuite.google.com/app/apikey' 
+        });
+      } else if (error.message.includes('quota')) {
+        return res.status(429).json({ 
+          error: 'API quota exceeded. Please try again later or check your Gemini API usage limits.' 
+        });
+      } else if (error.message.includes('safety')) {
+        return res.status(400).json({ 
+          error: 'Content generation was blocked by safety filters. Please try with different content.' 
+        });
+      } else {
+        return res.status(500).json({ 
+          error: `Content generation failed: ${error.message}` 
+        });
+      }
+    }
 
     // Create summary
     const summary = `Generated tailored resume${jobData.title ? ` for ${jobData.title}` : ''}${jobData.company ? ` at ${jobData.company}` : ''}`;
@@ -110,6 +161,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       tailoredResumeHtml,
       coverLetterHtml,
       summary,
+      usedFallback: !hasApiKey || process.env.NODE_ENV === 'development',
     });
   } catch (error: any) {
     console.error('Generation error:', error);
